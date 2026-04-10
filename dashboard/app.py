@@ -456,7 +456,7 @@ elif page == "🖥️ Cluster State":
             }
             return colors.get(val, "color: #e0e0e0")
 
-        styled = df.style.applymap(color_status, subset=["status"])
+        styled = df.style.map(color_status, subset=["status"])
         st.dataframe(styled, use_container_width=True, hide_index=True)
 
         # Restart count bar chart
