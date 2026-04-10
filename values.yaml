@@ -1,0 +1,47 @@
+# infra/prometheus/values.yaml
+# Prometheus stack Helm values tuned for Minikube (low resource usage)
+
+prometheus:
+  prometheusSpec:
+    retention: 24h
+    resources:
+      requests:
+        memory: 256Mi
+        cpu: 100m
+      limits:
+        memory: 512Mi
+        cpu: 300m
+    # Scrape interval — every 15s is fine for local demo
+    scrapeInterval: 15s
+    evaluationInterval: 15s
+
+    # Load our custom alert rules from ConfigMap
+    ruleSelector:
+      matchLabels:
+        app: k8s-ai-healer
+        role: alert-rules
+
+alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests:
+        memory: 64Mi
+        cpu: 50m
+      limits:
+        memory: 128Mi
+        cpu: 100m
+
+# Disable heavy components not needed locally
+grafana:
+  enabled: false   # We use Grafana Cloud free tier instead
+
+nodeExporter:
+  enabled: true
+
+kubeStateMetrics:
+  enabled: true
+
+# Disable persistent storage for local dev
+prometheus:
+  prometheusSpec:
+    storageSpec: {}

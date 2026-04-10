@@ -1,0 +1,73 @@
+# infra/alertmanager/alertmanager.yaml
+# AlertManager configuration — routes all alerts to our AI healer webhook
+# Deploy as a Secret in the monitoring namespace:
+#   kubectl create secret generic alertmanager-kube-prometheus-stack-alertmanager \
+#     --from-file=alertmanager.yaml \
+#     -n monitoring --dry-run=client -o yaml | kubectl apply -f -
+
+global:
+  resolve_timeout: 5m
+
+  # Slack global config (used by notification receiver)
+  slack_api_url: "${SLACK_WEBHOOK_URL}"
+
+# Inhibition rules — suppress warning if critical is already firing for same pod
+inhibit_rules:
+  - source_match:
+      severity: critical
+    target_match:
+      severity: warning
+    equal: [namespace, pod]
+
+route:
+  # Default receiver for anything unmatched
+  receiver: k8s-ai-healer-webhook
+
+  # Group alerts by namespace + alertname so we don't flood the webhook
+  group_by: [namespace, alertname]
+  group_wait: 30s        # Wait 30s to batch related alerts
+  group_interval: 5m     # Re-send grouped alert every 5m if still firing
+  repeat_interval: 1h    # Don't re-alert the same thing more than once/hour
+
+  routes:
+    # Critical alerts → immediate webhook trigger
+    - match:
+        severity: critical
+      receiver: k8s-ai-healer-webhook
+      group_wait: 10s     # Faster response for critical
+      repeat_interval: 30m
+
+    # Warning alerts → webhook but slower
+    - match:
+        severity: warning
+      receiver: k8s-ai-healer-webhook
+      group_wait: 60s
+      repeat_interval: 2h
+
+receivers:
+  # Primary receiver — our FastAPI webhook
+  - name: k8s-ai-healer-webhook
+    webhook_configs:
+      - url: "${WEBHOOK_URL}/webhook/alert"
+        send_resolved: true
+        http_config:
+          bearer_token: "${WEBHOOK_SECRET_TOKEN}"
+        # Full alert payload sent as JSON POST body
+
+  # Slack notification receiver (used after action is taken, not for routing)
+  - name: slack-notifications
+    slack_configs:
+      - channel: "#k8s-alerts"
+        username: "K8s AI Healer"
+        icon_emoji: ":robot_face:"
+        title: "{{ .GroupLabels.alertname }}"
+        text: >-
+          {{ range .Alerts }}
+            *Alert:* {{ .Annotations.summary }}
+            *Severity:* {{ .Labels.severity }}
+            *Namespace:* {{ .Labels.namespace }}
+          {{ end }}
+        send_resolved: true
+
+templates:
+  - /etc/alertmanager/templates/*.tmpl

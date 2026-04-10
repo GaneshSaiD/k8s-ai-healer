@@ -1,0 +1,139 @@
+# infra/prometheus/alert-rules.yaml
+# Custom PrometheusRule — these are the alerts that wake up our AI healer bot
+# Apply with: kubectl apply -f infra/prometheus/alert-rules.yaml
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: k8s-ai-healer-rules
+  namespace: monitoring
+  labels:
+    app: k8s-ai-healer
+    role: alert-rules
+spec:
+  groups:
+
+    # ── Pod health alerts ──────────────────────────────────────────────────
+    - name: pod-health
+      interval: 30s
+      rules:
+
+        - alert: PodCrashLooping
+          expr: |
+            rate(kube_pod_container_status_restarts_total[5m]) * 60 > 1
+          for: 2m
+          labels:
+            severity: critical
+            action: restart_pod
+          annotations:
+            summary: "Pod {{ $labels.pod }} is crash looping"
+            description: >
+              Pod {{ $labels.pod }} in namespace {{ $labels.namespace }}
+              has restarted more than once per minute for the last 2 minutes.
+            runbook: "https://github.com/GaneshSaiD/k8s-ai-healer/wiki/crash-loop"
+
+        - alert: PodNotReady
+          expr: |
+            kube_pod_status_ready{condition="true"} == 0
+          for: 5m
+          labels:
+            severity: warning
+            action: restart_pod
+          annotations:
+            summary: "Pod {{ $labels.pod }} not ready for 5 minutes"
+            description: >
+              Pod {{ $labels.pod }} in namespace {{ $labels.namespace }}
+              has been in a non-ready state for over 5 minutes.
+
+        - alert: PodOOMKilled
+          expr: |
+            kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1
+          for: 0m
+          labels:
+            severity: critical
+            action: scale_deployment
+          annotations:
+            summary: "Pod {{ $labels.pod }} OOM killed"
+            description: >
+              Container {{ $labels.container }} in pod {{ $labels.pod }}
+              was killed due to out-of-memory. Consider scaling or adjusting limits.
+
+    # ── Deployment health alerts ───────────────────────────────────────────
+    - name: deployment-health
+      interval: 30s
+      rules:
+
+        - alert: DeploymentReplicasMismatch
+          expr: |
+            kube_deployment_spec_replicas != kube_deployment_status_available_replicas
+          for: 5m
+          labels:
+            severity: warning
+            action: scale_deployment
+          annotations:
+            summary: "Deployment {{ $labels.deployment }} has replica mismatch"
+            description: >
+              Deployment {{ $labels.deployment }} in namespace {{ $labels.namespace }}
+              has {{ $value }} available replicas but spec requires more.
+
+        - alert: DeploymentUnavailable
+          expr: |
+            kube_deployment_status_available_replicas == 0
+          for: 2m
+          labels:
+            severity: critical
+            action: rollout_restart
+          annotations:
+            summary: "Deployment {{ $labels.deployment }} has 0 available replicas"
+            description: >
+              All replicas of deployment {{ $labels.deployment }} in
+              namespace {{ $labels.namespace }} are unavailable.
+
+    # ── Node health alerts ─────────────────────────────────────────────────
+    - name: node-health
+      interval: 60s
+      rules:
+
+        - alert: NodeHighCPU
+          expr: |
+            100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+          for: 5m
+          labels:
+            severity: warning
+            action: cordon_node
+          annotations:
+            summary: "Node {{ $labels.instance }} CPU above 85%"
+            description: >
+              Node {{ $labels.instance }} has been running at over 85% CPU
+              for 5 minutes. Consider cordoning and draining.
+
+        - alert: NodeMemoryPressure
+          expr: |
+            (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 < 10
+          for: 5m
+          labels:
+            severity: critical
+            action: cordon_node
+          annotations:
+            summary: "Node {{ $labels.instance }} memory below 10%"
+            description: >
+              Node {{ $labels.instance }} has less than 10% memory available.
+              Immediate action required.
+
+    # ── Namespace-level alerts ─────────────────────────────────────────────
+    - name: namespace-health
+      interval: 60s
+      rules:
+
+        - alert: HighPendingPods
+          expr: |
+            count by(namespace) (kube_pod_status_phase{phase="Pending"}) > 5
+          for: 10m
+          labels:
+            severity: warning
+            action: investigate
+          annotations:
+            summary: "Namespace {{ $labels.namespace }} has many pending pods"
+            description: >
+              More than 5 pods have been in Pending state for over 10 minutes
+              in namespace {{ $labels.namespace }}.
