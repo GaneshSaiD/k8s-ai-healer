@@ -1,0 +1,29 @@
+alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests:
+        memory: 64Mi
+        cpu: 50m
+      limits:
+        memory: 128Mi
+        cpu: 100m
+
+  config:
+    global:
+      resolve_timeout: 5m
+    route:
+      receiver: k8s-ai-healer-webhook
+      group_by: [namespace, alertname]
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 1h
+      routes:
+        - match:
+            severity: critical
+          receiver: k8s-ai-healer-webhook
+          group_wait: 10s
+    receivers:
+      - name: k8s-ai-healer-webhook
+        webhook_configs:
+          - url: "http://k8s-ai-healer-webhook.default.svc.cluster.local:8000/webhook/alert"
+            send_resolved: true
