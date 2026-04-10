@@ -1,4 +1,7 @@
 # webhook/main.py
+# FastAPI webhook receiver — entry point for all AlertManager alerts
+# Run locally: uvicorn webhook.main:app --reload --port 8000
+
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -110,6 +113,7 @@ async def receive_alert(
 
     contexts: list[AlertContext] = alert_parser.parse(payload)
 
+    # ── Phase 3: LLM Reasoning ────────────────────────────────────────────
     plans: list[RemediationPlan] = []
     for ctx in contexts:
         try:
@@ -124,6 +128,7 @@ async def receive_alert(
 
     _log_incident("firing", payload, contexts, plans)
 
+    # Phase 5 hook — Slack approval
     for plan in plans:
         if not plan.approved:
             logger.info(f"Awaiting Slack approval: {plan.action} on {plan.target}")
@@ -214,3 +219,33 @@ def _log_incident(
             for p in plans
         ],
     })
+
+
+# ── Phase 4: Executor endpoints ───────────────────────────────────────────
+
+@app.post("/execute")
+async def execute_plan(plan: RemediationPlan, _: None = Depends(verify_token)):
+    """
+    Execute an approved remediation plan against the cluster.
+    Requires plan.approved=True — otherwise returns 403.
+    """
+    from executor.actions import k8s_actions
+
+    if not plan.approved:
+        raise HTTPException(
+            status_code=403,
+            detail="Plan not approved. Use /webhook/test to generate and approve a plan first."
+        )
+
+    result = await k8s_actions.execute(plan)
+    return result.to_dict()
+
+
+@app.post("/simulate")
+async def simulate_plan(plan: RemediationPlan, _: None = Depends(verify_token)):
+    """
+    Simulate what an action WOULD do without touching the cluster.
+    Safe to call anytime — reads cluster state but never writes.
+    """
+    from executor.dry_run import dry_run_validator
+    return await dry_run_validator.simulate(plan)
